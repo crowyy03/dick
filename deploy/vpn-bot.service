@@ -1,0 +1,17 @@
+[Unit]
+Description=VPN Telegram bot (long polling, no Docker)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vpn-bot
+Group=vpn-bot
+WorkingDirectory=/opt/vpn-bot
+EnvironmentFile=-/opt/vpn-bot/.env
+ExecStart=/opt/vpn-bot/scripts/run.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+.env
+.git
+.cursor
+__pycache__
+*.pyc
+.venv
+deploy
+README.md
