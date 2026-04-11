@@ -3,7 +3,7 @@
 ASSUMPTIONS (adjust paths via env if your panel version differs):
 - Session auth: POST ``PANEL_LOGIN_PATH`` with form fields ``username``, ``password`` sets cookies.
 - ``GET PANEL_API_LIST_INBOUNDS`` returns JSON ``{ "success": true, "obj": [ inbound, ... ] }``.
-- Each inbound may expose ``settings`` as a JSON **string** containing ``clients`` array (x-ui family).
+- Each inbound: ``settings`` — JSON-**строка** или уже **объект** в JSON ответа; внутри массив ``clients``.
 - ``POST PANEL_API_ADD_CLIENT`` accepts ``{ "id": inboundId, "settings": "<json string>" }``
   where settings contains ``clients`` array with one new client.
 - ``GET .../getClientTraffics/{email}`` — трафик **одного** клиента; в пути **email** клиента (не id inbound). См. 3x-ui ``InboundController.getClientTraffics``.
@@ -31,6 +31,7 @@ from app.integrations.three_x_ui.errors import (
     PanelShareLinkError,
     PanelTransientError,
 )
+from app.integrations.three_x_ui.matching import emails_match_panel, normalize_panel_uuid
 from app.integrations.three_x_ui.vless_link import build_vless_share_url
 from app.integrations.three_x_ui.protocol import (
     ClientTrafficRow,
@@ -75,6 +76,31 @@ def _traffic_to_bytes(value: Any) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _inbound_settings_as_dict(settings_raw: Any) -> dict[str, Any]:
+    """3x-ui в list чаще отдаёт ``settings`` строкой; редко — вложенным dict после прокси/форка."""
+    if isinstance(settings_raw, dict):
+        return settings_raw
+    if isinstance(settings_raw, str) and settings_raw.strip():
+        try:
+            d = json.loads(settings_raw)
+            return d if isinstance(d, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _parse_client_enable(raw: Any) -> bool:
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw != 0
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("true", "1", "yes", "on")
+    return bool(raw)
 
 
 def _redact_for_log(obj: Any) -> Any:
@@ -203,13 +229,7 @@ class ThreeXUiAdapter:
         return out
 
     def _parse_clients_from_inbound(self, inbound_id: int, inbound_row: dict[str, Any]) -> list[PanelClientRow]:
-        settings_raw = inbound_row.get("settings")
-        if not settings_raw or not isinstance(settings_raw, str):
-            return []
-        try:
-            settings = json.loads(settings_raw)
-        except json.JSONDecodeError:
-            return []
+        settings = _inbound_settings_as_dict(inbound_row.get("settings"))
         clients = settings.get("clients")
         if not isinstance(clients, list):
             return []
@@ -220,14 +240,20 @@ class ThreeXUiAdapter:
             email = c.get("email")
             if not email:
                 continue
+            cid = c.get("id")
+            if cid is None:
+                cid = c.get("ID")
+            note = c.get("remark")
+            if note is None or note == "":
+                note = c.get("comment")
             rows.append(
                 PanelClientRow(
                     inbound_id=inbound_id,
-                    email=str(email),
-                    uuid=c.get("id"),
-                    remark=c.get("remark"),
+                    email=str(email).strip(),
+                    uuid=str(cid).strip() if cid is not None and str(cid).strip() else None,
+                    remark=str(note) if note is not None else None,
                     sub_id=c.get("subId"),
-                    enable=bool(c.get("enable", True)),
+                    enable=_parse_client_enable(c.get("enable")),
                     last_seen_utc=_parse_last_online_ms(c.get("lastOnline")),
                 )
             )
@@ -353,19 +379,55 @@ class ThreeXUiAdapter:
     async def verify_client_created(
         self, inbound_id: int, email: str, client_uuid: str
     ) -> PanelClientRow:
-        """Пост-проверка после addClient: клиент с тем же email и uuid в списке inbound."""
-        want = (client_uuid or "").strip().lower()
-        clients = await self.list_clients_in_inbound(inbound_id)
-        for c in clients:
-            if c.email != email:
+        """Пост-проверка после addClient: тот же email (без учёта регистра) и uuid (нормализованный).
+
+        Несколько повторов list — иногда панель отдаёт обновлённый inbound не в том же тике, что addClient.
+        """
+        want_u = normalize_panel_uuid(client_uuid)
+        last_clients: list[PanelClientRow] = []
+        for attempt in range(6):
+            clients = await self.list_clients_in_inbound(inbound_id)
+            last_clients = clients
+            by_email = [c for c in clients if emails_match_panel(c.email, email)]
+            if not by_email:
+                if attempt < 5:
+                    await asyncio.sleep(0.2 * (attempt + 1))
                 continue
-            got = (c.uuid or "").strip().lower()
-            if got == want:
+            if len(by_email) == 1:
+                c = by_email[0]
+                gu = normalize_panel_uuid(c.uuid)
+                if want_u:
+                    if gu == want_u:
+                        pass
+                    elif not gu:
+                        log.warning(
+                            "panel_verify_uuid_missing_using_email",
+                            email=email[:64],
+                            attempt=attempt,
+                        )
+                    else:
+                        if attempt < 5:
+                            await asyncio.sleep(0.2 * (attempt + 1))
+                        continue
                 if not c.enable:
                     raise PanelClientVerificationError("клиент в панели выключен")
                 return c
+            for c in by_email:
+                if normalize_panel_uuid(c.uuid) == want_u:
+                    if not c.enable:
+                        raise PanelClientVerificationError("клиент в панели выключен")
+                    return c
+            if attempt < 5:
+                await asyncio.sleep(0.2 * (attempt + 1))
+        log.warning(
+            "panel_verify_failed_snapshot",
+            inbound_id=inbound_id,
+            email=email[:64],
+            want_uuid_prefix=want_u[:16] if want_u else "",
+            parsed_client_count=len(last_clients),
+        )
         raise PanelClientVerificationError(
-            "клиент после создания не найден в inbound (email/uuid не совпали)"
+            "клиент после создания не найден в inbound (email/uuid не совпали с list)"
         )
 
     def build_vless_share_link(
@@ -392,15 +454,7 @@ class ThreeXUiAdapter:
         if not isinstance(stream, dict):
             raise PanelShareLinkError("streamSettings должен быть объектом JSON")
 
-        settings_obj: dict[str, Any] = {}
-        settings_raw = inbound_row.get("settings")
-        if isinstance(settings_raw, str) and settings_raw.strip():
-            try:
-                parsed = json.loads(settings_raw)
-                if isinstance(parsed, dict):
-                    settings_obj = parsed
-            except json.JSONDecodeError:
-                settings_obj = {}
+        settings_obj = _inbound_settings_as_dict(inbound_row.get("settings"))
 
         address = self._resolve_client_link_host(inbound_row)
         try:
@@ -439,10 +493,13 @@ class ThreeXUiAdapter:
             "limitIp": 0,
             "totalGB": 0,
             "expiryTime": 0,
-            "tgId": str(telegram_user_id) if telegram_user_id is not None else "",
             "subId": sub_id,
         }
+        if telegram_user_id is not None:
+            client_obj["tgId"] = int(telegram_user_id)
         if remark:
+            # В model.Client 3x-ui поле называется comment; remark оставляем для совместимости со старыми сборками.
+            client_obj["comment"] = remark
             client_obj["remark"] = remark
         flow = (self._settings.panel_client_flow or "").strip()
         if flow:

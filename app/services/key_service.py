@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot import texts_ru as user_txt
 from app.core.config import SecondKeyMode, Settings
 from app.integrations.three_x_ui.errors import PanelError
+from app.integrations.three_x_ui.matching import emails_match_panel
 from app.integrations.three_x_ui.protocol import (
     ClientTrafficRow,
     CreatedClient,
@@ -713,7 +714,11 @@ class KeyService:
                 panel_short = "панель не ответила"
             else:
                 match = next(
-                    (c for c in inbound_clients[k.inbound_id] if c.email == k.panel_client_email),
+                    (
+                        c
+                        for c in inbound_clients[k.inbound_id]
+                        if emails_match_panel(c.email, k.panel_client_email)
+                    ),
                     None,
                 )
                 if match is None:
