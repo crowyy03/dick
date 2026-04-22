@@ -11,6 +11,7 @@ BTN_ADM_REQUESTS = "Заявки 2-го"
 BTN_ADM_STATS = "Статистика"
 BTN_ADM_LOGS = "Логи"
 BTN_ADM_USERS = "Пользователи"
+BTN_ADM_SERVER = "🖥 Сервер"
 
 
 def menu_admin() -> ReplyKeyboardMarkup:
@@ -20,6 +21,7 @@ def menu_admin() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_ADM_IMPORT), KeyboardButton(text=BTN_ADM_UNBOUND)],
             [KeyboardButton(text=BTN_ADM_BIND), KeyboardButton(text=BTN_ADM_REQUESTS)],
             [KeyboardButton(text=BTN_ADM_LOGS), KeyboardButton(text=BTN_ADM_USERS)],
+            [KeyboardButton(text=BTN_ADM_SERVER)],
             [KeyboardButton(text=BTN_ADM_BACK)],
         ],
         resize_keyboard=True,
