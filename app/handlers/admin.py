@@ -115,8 +115,10 @@ def build_admin_router(settings: Settings) -> Router:
             reply_markup=ARK.menu_admin(),
         )
 
-    async def adm_answer_server(message: Message) -> None:
+    async def adm_answer_server(message: Message, container: AppContainer) -> None:
+        from app.core.config import settings
         import json
+        import asyncio
         try:
             with open("/host/proc/stat") as f:
                 line1 = f.readline().split()
@@ -148,7 +150,28 @@ def build_admin_router(settings: Settings) -> Router:
                 tx = stats.get("tx", 0)
                 net_str = f"  ↓ {rx} Мбит/с  ↑ {tx} Мбит/с"
             except Exception:
-                conns, net_str = "н/д", "  н/д (обновляется раз в минуту)"
+                conns, net_str, rx, tx = "н/д", "  н/д", 0, 0
+
+            # Топ пользователей по трафику из панели
+            top_str = ""
+            try:
+                clients = await container.panel.list_clients_in_inbound(settings.default_inbound_id)
+                emails = [c.email for c in clients]
+                traffics = await container.panel.fetch_client_traffics_by_emails(emails)
+                if traffics:
+                    sorted_clients = sorted(
+                        traffics.items(),
+                        key=lambda x: x[1].upload_bytes + x[1].download_bytes,
+                        reverse=True
+                    )[:5]
+                    lines = []
+                    for email, t in sorted_clients:
+                        total_gb = (t.upload_bytes + t.download_bytes) / 1024 / 1024 / 1024
+                        online = "🟢" if t.online else "⚪️"
+                        lines.append(f"  {online} {email}: {total_gb:.1f} ГБ")
+                    top_str = "\n\n👥 <b>Топ по трафику:</b>\n" + "\n".join(lines)
+            except Exception:
+                pass
 
             text = (
                 f"🖥 <b>Состояние сервера</b>\n\n"
@@ -157,6 +180,7 @@ def build_admin_router(settings: Settings) -> Router:
                 f"🧠 RAM: {mem_used:.1f} / {mem_total:.1f} ГБ\n"
                 f"🔗 Подключений Xray: {conns}\n\n"
                 f"📡 Трафик (последние 2с):\n{net_str}"
+                f"{top_str}"
             )
         except Exception as e:
             text = f"Ошибка получения данных: {e}"
@@ -231,10 +255,10 @@ def build_admin_router(settings: Settings) -> Router:
     @r.message(F.text == ARK.BTN_ADM_LOGS, combo)
     async def admin_reply_logs(message: Message, container: AppContainer) -> None:
         await adm_answer_logs(message, container)
-
+    
     @r.message(F.text == ARK.BTN_ADM_SERVER, combo)
-    async def admin_reply_server(message: Message) -> None:
-        await adm_answer_server(message)
+    async def admin_reply_server(message: Message, container: AppContainer) -> None:
+        await adm_answer_server(message, container)
 
     @r.message(F.text == ARK.BTN_ADM_USERS, combo)
     async def admin_reply_users(message: Message, container: AppContainer) -> None:
