@@ -1,3 +1,5 @@
+import asyncio
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -113,6 +115,79 @@ def build_admin_router(settings: Settings) -> Router:
             reply_markup=ARK.menu_admin(),
         )
 
+    async def adm_answer_server(message: Message) -> None:
+        try:
+            with open("/proc/stat") as f:
+                line1 = f.readline().split()
+            await asyncio.sleep(0.5)
+            with open("/proc/stat") as f:
+                line2 = f.readline().split()
+            idle1 = int(line1[4])
+            total1 = sum(int(x) for x in line1[1:])
+            idle2 = int(line2[4])
+            total2 = sum(int(x) for x in line2[1:])
+            cpu = round(100 * (1 - (idle2 - idle1) / (total2 - total1)), 1)
+
+            meminfo = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    k, v = line.split(":")
+                    meminfo[k.strip()] = int(v.strip().split()[0])
+            mem_total = meminfo["MemTotal"] / 1024 / 1024
+            mem_free = (meminfo["MemFree"] + meminfo.get("Buffers", 0) + meminfo.get("Cached", 0)) / 1024 / 1024
+            mem_used = mem_total - mem_free
+
+            with open("/proc/uptime") as f:
+                uptime_sec = int(float(f.read().split()[0]))
+            days = uptime_sec // 86400
+            hours = (uptime_sec % 86400) // 3600
+            mins = (uptime_sec % 3600) // 60
+
+            proc = await asyncio.create_subprocess_shell(
+                "ss -tnp 2>/dev/null | grep xray | wc -l",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+            xray_conns = stdout.decode().strip()
+
+            def read_net():
+                with open("/proc/net/dev") as f:
+                    lines = f.readlines()
+                result = {}
+                for line in lines[2:]:
+                    parts = line.split(":")
+                    if len(parts) == 2:
+                        iface = parts[0].strip()
+                        vals = parts[1].split()
+                        result[iface] = (int(vals[0]), int(vals[8]))
+                return result
+
+            net1 = read_net()
+            await asyncio.sleep(2)
+            net2 = read_net()
+
+            net_lines = []
+            for iface in ["eth0", "ens3", "ens18", "ens160"]:
+                if iface in net1 and iface in net2:
+                    rx = (net2[iface][0] - net1[iface][0]) / 2 / 1024 / 1024 * 8
+                    tx = (net2[iface][1] - net1[iface][1]) / 2 / 1024 / 1024 * 8
+                    net_lines.append(f"  ↓ {rx:.1f} Мбит/с  ↑ {tx:.1f} Мбит/с")
+
+            net_str = "\n".join(net_lines) if net_lines else "  н/д"
+
+            text = (
+                f"🖥 <b>Состояние сервера</b>\n\n"
+                f"⏱ Uptime: {days}д {hours}ч {mins}м\n"
+                f"💻 CPU: {cpu}%\n"
+                f"🧠 RAM: {mem_used:.1f} / {mem_total:.1f} ГБ\n"
+                f"🔗 Подключений Xray: {xray_conns}\n\n"
+                f"📡 Трафик (последние 2с):\n{net_str}"
+            )
+        except Exception as e:
+            text = f"Ошибка получения данных: {e}"
+        await message.answer(text, parse_mode="HTML", reply_markup=ARK.menu_admin())
+
     async def adm_answer_logs(message: Message, container: AppContainer) -> None:
         async with container.session_factory() as session:
             repo = AuditRepository(session)
@@ -182,6 +257,10 @@ def build_admin_router(settings: Settings) -> Router:
     @r.message(F.text == ARK.BTN_ADM_LOGS, combo)
     async def admin_reply_logs(message: Message, container: AppContainer) -> None:
         await adm_answer_logs(message, container)
+
+    @r.message(F.text == ARK.BTN_ADM_SERVER, combo)
+    async def admin_reply_server(message: Message) -> None:
+        await adm_answer_server(message)
 
     @r.message(F.text == ARK.BTN_ADM_USERS, combo)
     async def admin_reply_users(message: Message, container: AppContainer) -> None:
