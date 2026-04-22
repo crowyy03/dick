@@ -27,6 +27,13 @@ services:
     restart: unless-stopped
     networks:
       - internal
+    volumes:
+      - /proc/stat:/host/proc/stat:ro
+      - /proc/meminfo:/host/proc/meminfo:ro
+      - /proc/uptime:/host/proc/uptime:ro
+      - /proc/net/dev:/host/proc/net/dev:ro
+      - /proc/net/tcp:/host/proc/net/tcp:ro
+      - /proc/net/tcp6:/host/proc/net/tcp6:ro
 
 networks:
   internal:

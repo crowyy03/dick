@@ -117,10 +117,10 @@ def build_admin_router(settings: Settings) -> Router:
 
     async def adm_answer_server(message: Message) -> None:
         try:
-            with open("/proc/stat") as f:
+            with open("/host/proc/stat") as f:
                 line1 = f.readline().split()
             await asyncio.sleep(0.5)
-            with open("/proc/stat") as f:
+            with open("/host/proc/stat") as f:
                 line2 = f.readline().split()
             idle1 = int(line1[4])
             total1 = sum(int(x) for x in line1[1:])
@@ -129,7 +129,7 @@ def build_admin_router(settings: Settings) -> Router:
             cpu = round(100 * (1 - (idle2 - idle1) / (total2 - total1)), 1)
 
             meminfo = {}
-            with open("/proc/meminfo") as f:
+            with open("/host/proc/meminfo") as f:
                 for line in f:
                     k, v = line.split(":")
                     meminfo[k.strip()] = int(v.strip().split()[0])
@@ -137,22 +137,24 @@ def build_admin_router(settings: Settings) -> Router:
             mem_free = (meminfo["MemFree"] + meminfo.get("Buffers", 0) + meminfo.get("Cached", 0)) / 1024 / 1024
             mem_used = mem_total - mem_free
 
-            with open("/proc/uptime") as f:
+            with open("/host/proc/uptime") as f:
                 uptime_sec = int(float(f.read().split()[0]))
             days = uptime_sec // 86400
             hours = (uptime_sec % 86400) // 3600
             mins = (uptime_sec % 3600) // 60
 
-            proc = await asyncio.create_subprocess_shell(
-                "ss -tnp 2>/dev/null | grep xray | wc -l",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await proc.communicate()
-            xray_conns = stdout.decode().strip()
+            xray_conns = 0
+            for fname in ["/host/proc/net/tcp", "/host/proc/net/tcp6"]:
+                try:
+                    with open(fname) as f:
+                        for line in f.readlines()[1:]:
+                            if line.split()[3] == "01":
+                                xray_conns += 1
+                except FileNotFoundError:
+                    pass
 
             def read_net():
-                with open("/proc/net/dev") as f:
+                with open("/host/proc/net/dev") as f:
                     lines = f.readlines()
                 result = {}
                 for line in lines[2:]:
