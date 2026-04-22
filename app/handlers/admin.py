@@ -116,9 +116,7 @@ def build_admin_router(settings: Settings) -> Router:
         )
 
     async def adm_answer_server(message: Message, container: AppContainer) -> None:
-        from app.core.config import settings
         import json
-        import asyncio
         try:
             with open("/host/proc/stat") as f:
                 line1 = f.readline().split()
@@ -155,7 +153,7 @@ def build_admin_router(settings: Settings) -> Router:
             # Топ пользователей по трафику из панели
             top_str = ""
             try:
-                clients = await container.panel.list_clients_in_inbound(settings.default_inbound_id)
+                clients = await container.panel.list_clients_in_inbound(container.settings.default_inbound_id)
                 emails = [c.email for c in clients]
                 traffics = await container.panel.fetch_client_traffics_by_emails(emails)
                 if traffics:
