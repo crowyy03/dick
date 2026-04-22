@@ -116,16 +116,15 @@ def build_admin_router(settings: Settings) -> Router:
         )
 
     async def adm_answer_server(message: Message) -> None:
+        import json
         try:
             with open("/host/proc/stat") as f:
                 line1 = f.readline().split()
             await asyncio.sleep(0.5)
             with open("/host/proc/stat") as f:
                 line2 = f.readline().split()
-            idle1 = int(line1[4])
-            total1 = sum(int(x) for x in line1[1:])
-            idle2 = int(line2[4])
-            total2 = sum(int(x) for x in line2[1:])
+            idle1, total1 = int(line1[4]), sum(int(x) for x in line1[1:])
+            idle2, total2 = int(line2[4]), sum(int(x) for x in line2[1:])
             cpu = round(100 * (1 - (idle2 - idle1) / (total2 - total1)), 1)
 
             meminfo = {}
@@ -139,51 +138,24 @@ def build_admin_router(settings: Settings) -> Router:
 
             with open("/host/proc/uptime") as f:
                 uptime_sec = int(float(f.read().split()[0]))
-            days = uptime_sec // 86400
-            hours = (uptime_sec % 86400) // 3600
-            mins = (uptime_sec % 3600) // 60
+            days, hours, mins = uptime_sec // 86400, (uptime_sec % 86400) // 3600, (uptime_sec % 3600) // 60
 
-            xray_conns = 0
-            for fname in ["/host/proc/net/tcp", "/host/proc/net/tcp6"]:
-                try:
-                    with open(fname) as f:
-                        for line in f.readlines()[1:]:
-                            if line.split()[3] == "01":
-                                xray_conns += 1
-                except FileNotFoundError:
-                    pass
-
-            def read_net():
-                with open("/host/proc/net/dev") as f:
-                    lines = f.readlines()
-                result = {}
-                for line in lines[2:]:
-                    parts = line.split(":")
-                    if len(parts) == 2:
-                        iface = parts[0].strip()
-                        vals = parts[1].split()
-                        result[iface] = (int(vals[0]), int(vals[8]))
-                return result
-
-            net1 = read_net()
-            await asyncio.sleep(2)
-            net2 = read_net()
-
-            net_lines = []
-            for iface in ["eth0", "ens3", "ens18", "ens160"]:
-                if iface in net1 and iface in net2:
-                    rx = (net2[iface][0] - net1[iface][0]) / 2 / 1024 / 1024 * 8
-                    tx = (net2[iface][1] - net1[iface][1]) / 2 / 1024 / 1024 * 8
-                    net_lines.append(f"  ↓ {rx:.1f} Мбит/с  ↑ {tx:.1f} Мбит/с")
-
-            net_str = "\n".join(net_lines) if net_lines else "  н/д"
+            try:
+                with open("/host/stats.json") as f:
+                    stats = json.load(f)
+                conns = stats.get("conns", "н/д")
+                rx = stats.get("rx", 0)
+                tx = stats.get("tx", 0)
+                net_str = f"  ↓ {rx} Мбит/с  ↑ {tx} Мбит/с"
+            except Exception:
+                conns, net_str = "н/д", "  н/д (обновляется раз в минуту)"
 
             text = (
                 f"🖥 <b>Состояние сервера</b>\n\n"
                 f"⏱ Uptime: {days}д {hours}ч {mins}м\n"
                 f"💻 CPU: {cpu}%\n"
                 f"🧠 RAM: {mem_used:.1f} / {mem_total:.1f} ГБ\n"
-                f"🔗 Подключений Xray: {xray_conns}\n\n"
+                f"🔗 Подключений Xray: {conns}\n\n"
                 f"📡 Трафик (последние 2с):\n{net_str}"
             )
         except Exception as e:

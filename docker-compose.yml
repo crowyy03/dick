@@ -34,6 +34,7 @@ services:
       - /proc/net/dev:/host/proc/net/dev:ro
       - /proc/net/tcp:/host/proc/net/tcp:ro
       - /proc/net/tcp6:/host/proc/net/tcp6:ro
+      - /opt/stats.json:/host/stats.json:ro
 
 networks:
   internal:
